@@ -1,52 +1,197 @@
 # Hybrid RAG Agent
 
-A production-ready Hybrid RAG (Retrieval-Augmented Generation) Agent for financial intelligence. This system intelligently routes queries between structured SQL data (stock prices) and unstructured PDF documents (10-K annual reports), synthesizing answers from both sources.
+**Built by Tasnim Ali Makableh**
 
-## Overview
+Hey there! This is my take on building a Hybrid RAG (Retrieval-Augmented Generation) Agent focused on financial intelligence. Basically, it's designed to help investment analysts dig into questions that mix structured data from stock prices with unstructured info from company reports. The cool part is how it smartly decides whether to pull from a database, search PDFs, or do both, then puts together a solid answer with sources.
 
-This system serves investment analysts who need to ask complex questions requiring information from two distinct sources:
+## What's This All About?
 
-1. **Structured Data**: SQLite database with historical daily stock prices
-2. **Unstructured Knowledge**: 10-K Annual Reports (PDFs) with risks, strategy, and legal proceedings
+Imagine you're an analyst needing to know stuff like "How volatile was Tesla's stock last quarter?" or "What risks does Apple highlight in their latest 10-K?" Sometimes you need both – like comparing a company's risk factors with their actual stock performance. This agent handles that by routing queries intelligently and combining insights from:
 
-The agent uses intelligent routing to determine whether a query needs SQL execution, PDF retrieval, or both, then synthesizes a coherent answer with proper citations.
+- **Stock Data**: A SQLite database with daily prices for companies like AAPL, MSFT, TSLA
+- **Reports**: 10-K annual reports in PDF form, full of strategy, risks, and legal stuff
 
-## Architecture
+It uses local LLMs (via Ollama) to keep things private and fast, with caching to avoid repeating work.
+
+## How It Works (High-Level)
+
+Basically, I created a smart system that takes a question and decides what to do with it. Here's what I built step by step:
+
+1. **Router**: First, the question goes to a router that checks if it's about stock numbers, company reports, both, or needs clarification.
+2. **Tools**: Depending on the type, it either runs a SQL query on the stock database, searches the PDF reports, or does both.
+3. **Combine**: Then it puts all the info together into a clear answer.
+4. **Cache**: It remembers answers to similar questions to save time.
+
+Here's a simple diagram of the flow:
 
 ```mermaid
 graph TD
-    A[User Query] --> B[Router Agent]
-    B --> C{Query Type?}
-    C -->|SQL_ONLY| D[SQL Tool]
-    C -->|PDF_ONLY| E[Hybrid Retriever]
-    C -->|BOTH| D
-    C -->|BOTH| E
-    C -->|CLARIFY| F[Clarification]
-    C -->|REFUSE| G[Refusal]
-    D --> H[Answer Synthesis]
-    E --> H
-    H --> I[Cache Check]
-    I --> J[Final Answer]
+    A[User Question] --> B[Router]
+    B --> C{Type?}
+    C -->|Numbers| D[SQL Query]
+    C -->|Reports| E[Search PDFs]
+    C -->|Both| D
+    C -->|Both| E
+    C -->|Unclear| F[Ask More]
+    D --> G[Combine Info]
+    E --> G
+    G --> H[Check Cache]
+    H --> I[Final Answer]
 ```
 
-## How a Question is Handled
+## Getting It Running
 
-1. **Routing**: The router classifies the query into one of five categories:
-   - `SQL_ONLY`: Requires database lookup (e.g., "What was Tesla's closing price on June 15, 2023?")
-   - `PDF_ONLY`: Requires document search (e.g., "What are Apple's main risk factors?")
-   - `BOTH`: Needs both sources (e.g., "Compare Microsoft's AI risks with its stock volatility in October 2023")
-   - `CLARIFY`: Ambiguous query (missing company name, date, etc.)
-   - `REFUSE`: Contains dangerous SQL injection attempts
+You'll need Python 3.11+, Ollama running locally, and some PDFs. Here's the step-by-step:
 
-2. **Tool Execution**:
-   - **SQL Tool**: Generates SQL dynamically, validates for safety (read-only, whitelist tables), executes query
-   - **Hybrid Retriever**: Combines BM25 (keyword) and vector (semantic) search, optionally reranks results
+### 1. Grab the Dependencies
+```bash
+pip install -r requirements.txt
+```
 
-3. **Answer Synthesis**: LLM synthesizes answer from retrieved context and SQL results
+### 2. Set Up the Data
+```bash
+# Make the stock database
+python setup_data.py
 
-4. **Caching**: Results are cached semantically to avoid redundant LLM calls
+# Get the PDFs (it'll download automatically or tell you links)
+python download_pdfs.py
+```
 
-## How to Run
+### 3. Fire Up Ollama
+If you haven't already:
+```bash
+# Get Ollama from ollama.com
+ollama pull llama3.1:8b
+ollama pull nomic-embed-text
+# It should start automatically, but if not: ollama serve
+```
+
+### 4. Process the PDFs
+```bash
+python -m src.ingest
+```
+This pulls out text and tables, chunks them smartly, and builds a search index.
+
+### 5. Launch the API
+```bash
+uvicorn src.api:app --reload
+```
+Head to http://localhost:8000 to play around.
+
+### 6. Test It Out (Optional)
+```bash
+python eval/run_eval.py
+```
+Runs some sample questions and spits out results in a CSV.
+
+## Try Some Queries
+
+- **Simple Stock Question**: "What's the average price of MSFT in Q3 2023?"
+  - Routes to SQL, generates a query, runs it.
+
+- **Report Dive**: "What are Tesla's biggest risks?"
+  - Searches the 10-K PDF for relevant sections.
+
+- **Mix It Up**: "How do Apple's revenue risks compare to their stock dips in 2023?"
+  - Hits both the database and PDFs, then explains with citations.
+
+## Using the API
+
+Hit `/query` with a POST:
+
+```json
+{
+  "question": "How much did Microsoft earn last year?",
+  "stream": false
+}
+```
+
+Get back something like:
+```json
+{
+  "answer": "Microsoft's revenue was $211 billion...",
+  "sources": [{"type": "pdf", "company": "MSFT", "page": "30"}],
+  "route": "PDF_ONLY"
+}
+```
+
+Set `"stream": true` for live streaming of the response.
+
+## Project Layout
+
+```
+.
+├── src/                 # Main code
+│   ├── api.py           # The web endpoint
+│   ├── agent_graph.py   # How everything connects
+│   ├── cache.py         # Saves repeated queries
+│   ├── config.py        # Settings
+│   ├── ingest.py        # PDF processing
+│   ├── prompts.py       # What to tell the LLM
+│   ├── retriever.py     # Searching PDFs
+│   └── tools_sql.py     # Safe SQL stuff
+├── eval/                # Testing
+│   └── run_eval.py
+├── data/                # All the data files
+│   ├── finance.db       # Stock prices DB
+│   ├── chunks.json      # Processed PDF bits
+│   ├── pdfs/            # The actual PDFs
+│   ├── vector_store/    # Search index
+│   └── cache/           # Cached answers
+├── setup_data.py        # Builds the DB
+├── golden_dataset.json  # Test questions
+├── run_ci.sh            # Quick test script
+├── Dockerfile           # For containerizing
+└── requirements.txt     # Python packages
+```
+
+## Tweaking Settings
+
+You can set env vars like:
+- `MODEL_NAME`: Which LLM to use (default: llama3.1:8b)
+- `TOP_K_VECTOR`: How many search results (default: 5)
+- `CACHE_ENABLED`: Skip repeats (default: true)
+
+## Cool Bits I Added
+
+- **Smart PDF Handling**: Keeps tables intact when chunking, no broken data.
+- **Safe SQL**: Only reads data, checks for bad stuff, uses a whitelist.
+- **Dual Search**: Keywords + meaning-based search for better finds.
+- **Caching**: Remembers similar questions to speed things up.
+
+## Testing & Evaluation
+
+The eval script checks how well it retrieves info and answers accurately, outputting scores for precision and faithfulness.
+
+## Docker Option
+
+If you prefer containers:
+```bash
+docker build -t hybrid-rag-agent .
+docker run -p 8000:8000 hybrid-rag-agent
+```
+
+## Quick CI Run
+
+For Linux/Mac: `bash run_ci.sh`
+Windows: `run_ci.bat`
+
+Sets up data and runs tests.
+
+## If Things Go Wrong
+
+- **No data found?** Rerun `python -m src.ingest`
+- **Ollama issues?** Make sure it's running on localhost:11434
+- **PDF problems?** Double-check files are in data/pdfs/ with right names
+
+## What's Next?
+
+- Better embeddings and reranking
+- Support for more languages (Arabic maybe?)
+- Handling conversations
+- More doc types
+
+This was a fun project to build – let me know if you try it out!
 
 ### Prerequisites
 
@@ -273,30 +418,17 @@ This script:
 2. Builds vector index if missing
 3. Runs evaluation
 
-## Troubleshooting
+## If Things Go Wrong
 
-### "No chunks found"
+- **No data found?** Rerun `python -m src.ingest`
+- **Ollama issues?** Make sure it's running on localhost:11434
+- **PDF problems?** Double-check files are in data/pdfs/ with right names
 
-Run ingestion: `python -m src.ingest`
+## What's Next?
 
-### "Ollama connection failed"
+- Better embeddings and reranking
+- Support for more languages (Arabic maybe?)
+- Handling conversations
+- More doc types
 
-Ensure Ollama is running: `ollama serve` or check `MODEL_BASE_URL` in config.
-
-### "PDF parsing errors"
-
-Ensure PDFs are valid and placed in `data/pdfs/`. Check filenames match expected patterns.
-
-## TODO / Future Improvements
-
-- [ ] Replace fallback embeddings with proper embedding model
-- [ ] Implement proper cross-encoder reranker
-- [ ] Add Arabic translation support (bonus challenge)
-- [ ] Improve semantic chunking algorithm
-- [ ] Add more sophisticated LLM-as-a-judge for evaluation
-- [ ] Support for additional document types
-- [ ] Multi-turn conversation support
-
-## License
-
-This project is part of a technical assessment.
+This was a fun project to build – let me know if you try it out!
